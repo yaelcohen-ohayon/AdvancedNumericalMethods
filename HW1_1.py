@@ -73,16 +73,19 @@ def shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS
     resArray = []
     ii = 0
     for lIdx, lamda in enumerate(lambdaArray):
-        if lamda == 2:
-            ETA_INF = 2.0  # קירוב של "אינסוף"
-            STEPS = 200    # מספר צעדים
-            H = ETA_INF / STEPS
-        else:
-            ETA_INF = 10  # קירוב של "אינסוף"
-            STEPS = 1000    # מספר צעדים
-            H = ETA_INF / STEPS
+        # if lamda == 2:
+        #     ETA_INF = 2.0  # קירוב של "אינסוף"
+        #     STEPS = 200    # מספר צעדים
+        #     H = ETA_INF / STEPS
+        # else:
+        #     ETA_INF = 10  # קירוב של "אינסוף"
+        #     STEPS = 1000    # מספר צעדים
+        #     H = ETA_INF / STEPS
         for fwIdx, fw_val in enumerate(fw):
             for cIdx, c in enumerate(oneOverC):
+                ETA_INF = initGuessArray[ii, 5]
+                H = 0.1
+                STEPS = int(ETA_INF / H)
                 LAMBDA = lamda
                 C_PARAM_FINAL = c**(-2/3)
                 C_PARAM = c**(1/3)
@@ -90,8 +93,8 @@ def shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS
                 initDfGuess = initGuessArray[ii, 4]
                 ii += 1
                 fwTimesC = fw_val * C_PARAM
-                # fwToUse = fwTimesC
-                fwToUse = fw_val
+                fwToUse = fwTimesC
+                # fwToUse = fw_val
                 res = integrate_system(fwToUse, initDfGuess, initDThetaGuess)
                 resArray.append(res)
 
@@ -137,60 +140,63 @@ def shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS
                     errNorm = np.sqrt(fTagError**2 + thetaError**2)
                     # print(f"Iterating for Lambda={lamda}, fw={fw_val}, 1/C={c}, Error Norm={errNorm}")
 
-                plt.figure()
-                plt.plot(res[0], res[1][:, :])  # Plotting eta vs f
-                plt.grid()
-                plt.xlabel('Eta')
-                plt.ylabel('f(eta)')
-                plt.title(f'Lambda={lamda}, C^1/3={C_PARAM_FINAL}, fw={fw_val}')
-                plt.legend(['f', "f'", 'theta', "theta'"])
+                # plt.figure()
+                # plt.plot(res[0], res[1][:, :])  # Plotting eta vs f
+                # plt.grid()
+                # plt.xlabel('Eta')
+                # plt.ylabel('f(eta)')
+                # plt.title(f'Lambda={lamda}, C^1/3={C_PARAM_FINAL}, fw={fw_val}')
+                # plt.legend(['f', "f'", 'theta', "theta'"])
 
     return resArray
 
 data = [ # ערכי ההתחלה מהמאמר
     # --- Lambda = 0.5 ---
     # fw = -1
-    [0.5, -1.0, 1.0, 0.8862, 1.8862],
-    [0.5, -1.0, 2.0, 1.0450, 2.5547],
-    [0.5, -1.0, 5.0, 1.3575, 4.1212],
-    [0.5, -1.0, 8.0, 1.5724, 5.3921],
+    [0.5, -1.0, 1.0, 0.8862, 1.8862, 3.2154],
+    [0.5, -1.0, 2.0, 1.0450, 2.5547, 2.9088],
+    [0.5, -1.0, 5.0, 1.3575, 4.1212, 2.4379],
+    [0.5, -1.0, 8.0, 1.5724, 5.3921, 1.8704],
     # fw = 0
-    [0.5, 0.0, 1.0, 1.1020, 1.7474],
-    [0.5, 0.0, 2.0, 1.2495, 2.3479],
-    [0.5, 0.0, 5.0, 1.5503, 3.7996],
-    [0.5, 0.0, 8.0, 1.7610, 4.9990],
+    [0.5, 0.0, 1.0, 1.1020, 1.7474, 2.8250],
+    [0.5, 0.0, 2.0, 1.2495, 2.3479, 2.6049],
+    [0.5, 0.0, 5.0, 1.5503, 3.7996, 2.2380],
+    [0.5, 0.0, 8.0, 1.7610, 4.9990, 2.0340],
     # fw = 1
-    [0.5, 1.0, 1.0, 1.3745, 1.6264],
-    [0.5, 1.0, 2.0, 1.5041, 2.1591],
-    [0.5, 1.0, 5.0, 1.7825, 3.4927],
-    [0.5, 1.0, 8.0, 1.9836, 4.6181],
+    [0.5, 1.0, 1.0, 1.3745, 1.6264, 2.4624],
+    [0.5, 1.0, 2.0, 1.5041, 2.1591, 2.3115],
+    [0.5, 1.0, 5.0, 1.7825, 3.4927, 2.0347],
+    [0.5, 1.0, 8.0, 1.9836, 4.6181, 1.8688],
 
     # --- Lambda = 2.0 ---
     # fw = -1
-    [2.0, -1.0, 1.0, 1.6309, 2.1235],
-    [2.0, -1.0, 2.0, 1.9494, 2.9781],
-    [2.0, -1.0, 5.0, 2.5716, 4.9815],
-    [2.0, -1.0, 8.0, 2.9971, 6.6069],
-    # fw = 0
-    [2.0, 0.0, 1.0, 2.0044, 1.9159],
-    [2.0, 0.0, 2.0, 2.2889, 2.6630],
-    [2.0, 0.0, 5.0, 2.8820, 4.4981],
-    [2.0, 0.0, 8.0, 3.2927, 6.0105],
+    [2.0, -1.0, 1.0, 1.6309, 2.1235, 2.2138],
+    [2.0, -1.0, 2.0, 1.9494, 2.9781, 2.0284],
+    [2.0, -1.0, 5.0, 2.5716, 4.9815, 1.7304],
+    [2.0, -1.0, 8.0, 2.9971, 6.6069, 1.5729],
+    # fw = 0, 3.2154
+    [2.0, 0.0, 1.0, 2.0044, 1.9159, 1.8532],
+    [2.0, 0.0, 2.0, 2.2889, 2.6630, 1.7334],
+    [2.0, 0.0, 5.0, 2.8820, 4.4981, 1.5188],
+    [2.0, 0.0, 8.0, 3.2927, 6.0105, 1.3954],
     # fw = 1
-    [2.0, 1.0, 1.0, 2.5182, 1.7391],
-    [2.0, 1.0, 2.0, 2.7574, 2.3852],
-    [2.0, 1.0, 5.0, 3.2827, 4.0268],
-    [2.0, 1.0, 8.0, 3.6683, 5.4273]
+    [2.0, 1.0, 1.0, 2.5182, 1.7391, 1.5371],
+    [2.0, 1.0, 2.0, 2.7574, 2.3852, 1.4656],
+    [2.0, 1.0, 5.0, 3.2827, 4.0268, 1.3230],
+    [2.0, 1.0, 8.0, 3.6683, 5.4273, 1.2327]
 ]
 
 initGuessArray = np.array(data)
 # initGuessArray[:, 3:] -= 0.3
 ii = 0  # index to select which set of parameters to run
 
-# lambdaArray = np.asarray([0.5, 2])
-lambdaArray = np.asarray([2])
+lambdaArray = np.asarray([0.5, 2])
+# lambdaArray = np.asarray([2])
+# lambdaArray = np.asarray([0.5])
 fw = np.asarray([-1, 0, 1])
 # fw = np.asarray([-1])
+# fw = np.asarray([0])
+# fw = np.asarray([1])
 # oneOverC = np.asarray([1, 2, 5, 8])
 oneOverC = np.asarray([1, 2, 5, 8])
 # oneOverC = np.asarray([1])
