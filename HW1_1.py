@@ -3,14 +3,46 @@ import matplotlib.pyplot as plt
 import scipy.integrate as integrate
 
 def calc_ddf(lamda, eta, dtheta, theta):
+    """Calculate the second derivative of f (equation 8 from the paper).
+    
+    Args:
+        lamda (float): Lambda parameter.
+        eta (float): Similarity variable.
+        dtheta (float): First derivative of theta.
+        theta (float): Temperature function.
+    
+    Returns:
+        float: Second derivative of f (f'').
+    """
     ddf = -((lamda - 2)/3 * eta * dtheta + lamda * theta)
     return ddf
 
 def calc_ddtheta(lamda, df, theta, dtheta, f):
+    """Calculate the second derivative of theta (equation 9 from the paper).
+    
+    Args:
+        lamda (float): Lambda parameter.
+        df (float): First derivative of f.
+        theta (float): Temperature function.
+        dtheta (float): First derivative of theta.
+        f (float): Stream function.
+    
+    Returns:
+        float: Second derivative of theta (theta'').
+    """
     ddtheta = lamda * df * theta - (lamda + 1)/3 * f * dtheta
     return ddtheta
 
 def derivatives(eta, y):
+    """Compute the system of first-order ODEs for the shooting method.
+    
+    Args:
+        eta (float): Independent variable (similarity variable).
+        y (np.ndarray): State vector [f, f', theta, theta'].
+    
+    Returns:
+        np.ndarray: Derivatives [f', f'', theta', theta''].
+    """
     # y = [f, f', theta, theta']
     f = y[0]
     df = y[1]
@@ -26,16 +58,39 @@ def derivatives(eta, y):
     return np.array([df, ddf, dtheta, ddtheta])
 
 def RK4_solver(fun, eta, y, h):
+    """Fourth-order Runge-Kutta solver for ODE systems.
+    
+    Args:
+        fun (callable): Function that computes derivatives dy/deta = fun(eta, y).
+        eta (float): Current value of independent variable.
+        y (np.ndarray): Current state vector.
+        h (float): Step size.
+    
+    Returns:
+        np.ndarray: Updated state vector at eta + h.
+    """
     k1 = fun(eta, y)
     k2 = fun(eta + 0.5*h, y + 0.5*h*k1)
     k3 = fun(eta + 0.5*h, y + 0.5*h*k2)
     k4 = fun(eta + h, y + h*k3)
 
-    y += (h/6.0) * (k1 + 2*k2 + 2*k3 + k4)
+    y_new = y + (h/6.0) * (k1 + 2*k2 + 2*k3 + k4)
     
-    return y 
+    return y_new
 
 def integrate_system(fw, df_guess, dtheta_guess):
+    """Integrate the ODE system using RK4 method.
+    
+    Args:
+        fw (float): Initial value of f at eta=0.
+        df_guess (float): Guessed value of f' at eta=0.
+        dtheta_guess (float): Guessed value of theta' at eta=0.
+    
+    Returns:
+        tuple: (eta_array, results_array) where:
+            - eta_array: Array of eta values.
+            - results_array: Array of shape (N, 4) with [f, f', theta, theta'] at each eta.
+    """
     y0 = np.array([fw, df_guess, 1.0, dtheta_guess]) # תנאי התחלה: f(0)=fw, theta(0)=1
     eta = 0.0
     results = [y0.copy()] # לאחסון התוצאות
@@ -52,12 +107,30 @@ def integrate_system(fw, df_guess, dtheta_guess):
     return np.array(etas), np.array(results)
 
 def newton_raphson_solver(x1, x2Df, x2Theta, y1, y2Df, y2Theta, delta, initGuess, errors):
+    """Newton-Raphson solver for updating initial guess in shooting method.
+    
+    Args:
+        x1 (float): Baseline f' at boundary.
+        x2Df (float): f' at boundary with perturbed df_guess.
+        x2Theta (float): theta at boundary with perturbed df_guess.
+        y1 (float): Baseline theta at boundary.
+        y2Df (float): f' at boundary with perturbed dtheta_guess.
+        y2Theta (float): theta at boundary with perturbed dtheta_guess.
+        delta (float): Perturbation size.
+        initGuess (np.ndarray): Current guess [df_guess, dtheta_guess].
+        errors (np.ndarray): Error vector [f'_error, theta_error].
+    
+    Returns:
+        np.ndarray: Updated guess [df_guess, dtheta_guess].
+    """
     J = np.zeros((2, 2)) # הגדרת יעקוביאן לניוטון רפסון
-    J[0, 0] = (x2Df - x1) / delta  # df_final לפי df_guess
-    J[1, 0] = (x2Theta - y1) / delta  # theta_final לפי dtheta_guess
-
-    J[0, 1] = (y2Df - x1) / delta  # df_final לפי dtheta_guess
-    J[1, 1] = (y2Theta - y1) / delta
+    # J[i,j] = ∂(error_i)/∂(guess_j)
+    # error vector = [f'_error, theta_error]
+    # guess vector = [df_guess, dtheta_guess]
+    J[0, 0] = (x2Df - x1) / delta      # ∂(f'_error)/∂(df_guess)
+    J[0, 1] = (y2Df - x1) / delta      # ∂(f'_error)/∂(dtheta_guess)
+    J[1, 0] = (x2Theta - y1) / delta   # ∂(theta_error)/∂(df_guess)
+    J[1, 1] = (y2Theta - y1) / delta   # ∂(theta_error)/∂(dtheta_guess)
     
     try:
         update = np.linalg.solve(J, errors)
@@ -68,6 +141,21 @@ def newton_raphson_solver(x1, x2Df, x2Theta, y1, y2Df, y2Theta, delta, initGuess
         return initGuess
 
 def shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS=1e-3):
+    """Solve boundary value problem using shooting method with Newton-Raphson iteration.
+    
+    Args:
+        lambdaArray (np.ndarray): Array of lambda values to solve for.
+        fw (np.ndarray): Array of wall velocity values.
+        oneOverC (np.ndarray): Array of 1/C values (suction/injection parameter).
+        initGuessArray (np.ndarray): Initial guess table with shape (N, 6).
+        TARGET_THETA (float): Target value for theta at infinity (typically 0).
+        EPS (float, optional): Convergence tolerance. Defaults to 1e-3.
+    
+    Returns:
+        tuple: (resArray, paramsArray) where:
+            - resArray: List of tuples (eta_array, solution_array) for each case.
+            - paramsArray: List of parameter dictionaries for each case.
+    """
     global ETA_INF, STEPS, H, LAMBDA
     resArray = []
     paramsArray = []  # Store parameters for each run
@@ -85,18 +173,15 @@ def shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS
                 c_idx_full = full_oneOverC.index(c)
                 ii = lambda_idx_full * 12 + fw_idx_full * 4 + c_idx_full
                 
-                ETA_INF = initGuessArray[ii, 5] * 1.3
-                # ETA_INF = 6.0
-                H = 0.01
+                ETA_INF = initGuessArray[ii, 5] * 2
+                H = 0.00001
                 STEPS = int(ETA_INF / H)
-                # STEPS = 200
                 LAMBDA = lamda
                 C_PARAM_FINAL = c**(-2/3)
                 C_PARAM = c**(1/3)
-                initDThetaGuess = -initGuessArray[ii, 3]
+                initDThetaGuess = initGuessArray[ii, 3]
                 initDfGuess = initGuessArray[ii, 4]
-                fwTimesC = fw_val * C_PARAM
-                # fwToUse = fwTimesC
+                # Boundary condition: f(0) = fw (no scaling needed for shooting method)
                 fwToUse = fw_val
                 res = integrate_system(fwToUse, initDfGuess, initDThetaGuess)
                 resArray.append(res)
@@ -121,7 +206,7 @@ def shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS
                 divergence_detected = False
                 
                 while errNorm > EPS and not divergence_detected:
-                    delta = 1e-1
+                    delta = 1e-6
                     resDf = integrate_system(fwToUse, initDfGuess + delta, initDThetaGuess)
                     resDtheta = integrate_system(fwToUse, initDfGuess, initDThetaGuess + delta)
 
@@ -496,8 +581,26 @@ def shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS
 #     return resArray
 
 def finite_difference_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS=1e-5):
+    """Solve boundary value problem using finite difference method with iterative solving.
+    
+    Uses a block iteration scheme where f is integrated from equation (8) and theta
+    is solved using Gauss-Seidel iteration from equation (9).
+    
+    Args:
+        lambdaArray (np.ndarray): Array of lambda values to solve for.
+        fw (np.ndarray): Array of wall velocity values.
+        oneOverC (np.ndarray): Array of 1/C values (suction/injection parameter).
+        initGuessArray (np.ndarray): Initial guess table with shape (N, 6).
+        TARGET_THETA (float): Target value for theta at infinity (typically 0).
+        EPS (float, optional): Convergence tolerance. Defaults to 1e-5.
+    
+    Returns:
+        tuple: (resArray, paramsArray) where:
+            - resArray: List of tuples (eta_array, solution_array) for each case.
+            - paramsArray: List of parameter dictionaries for each case.
+    """
     global ETA_INF, STEPS, H, LAMBDA, MAX_ITER
-    MAX_ITER = 10000
+    MAX_ITER = 30000
     resArray = []
     paramsArray = []  # Store parameters for each run
     # Full arrays matching the data table structure
@@ -528,10 +631,10 @@ def finite_difference_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_T
                 c_idx_full = full_oneOverC.index(c)
                 ii = lambda_idx_full * 12 + fw_idx_full * 4 + c_idx_full
                 
-                ETA_INF = initGuessArray[ii, 5] * 4.0
-
+                ETA_INF = initGuessArray[ii, 5] * 1
+                ETA_INF = 7.0
                 # ---- FIX: consistent grid ----
-                H = 0.01
+                H = 0.001
                 N = int(np.ceil(ETA_INF / H))
                 if N < 6:
                     N = 6
@@ -610,14 +713,14 @@ def finite_difference_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_T
                     err_theta = np.max(np.abs(theta - theta_old))
                     err_f = np.max(np.abs(f - f_old))
 
-                    if k % 100 == 0:
+                    if k % 1000 == 0:
                         fp_inf_est = (3*f[-1] - 4*f[-2] + f[-3]) / (2.0 * H)
                         print(f"Iter {k}: Theta Error={err_theta:.2e}, f'(inf)={fp_inf_est:.6f}, STEPS={STEPS}")
 
                     if max(err_theta, err_f) < EPS:
                         print(f"  Converged in {k} iterations.")
                         dtheta_out = d1_center(theta, H)
-                        resArray.append([eta, np.asarray([f, fp, theta, dtheta_out])])
+                        resArray.append([eta, np.asarray([f, fp, theta, dtheta_out]).T])
                         paramsArray.append({'lambda': lamda, 'fw': fw_val, 'oneOverC': c})
                         converged = True
                         break
@@ -625,48 +728,52 @@ def finite_difference_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_T
                 if not converged:
                     print("Did not converge.")
                     dtheta_out = d1_center(theta, H)
-                    resArray.append([eta, np.asarray([f, fp, theta, dtheta_out])])
+                    resArray.append([eta, np.asarray([f, fp, theta, dtheta_out]).T])
                     paramsArray.append({'lambda': lamda, 'fw': fw_val, 'oneOverC': c})
 
     return resArray, paramsArray
 
 def gauss_seidel_method():
+    """Placeholder for Gauss-Seidel method implementation.
+    
+    This function is currently not implemented.
+    """
     pass
 
 data = [ # ערכי ההתחלה מהמאמר
     # --- Lambda = 0.5 ---
     # fw = -1
-    [0.5, -1.0, 1.0, 0.8862, 1.8862, 3.2154],
-    [0.5, -1.0, 2.0, 1.0450, 2.5547, 2.9088],
-    [0.5, -1.0, 5.0, 1.3575, 4.1212, 2.4379],
-    [0.5, -1.0, 8.0, 1.5724, 5.3921, 1.8704],
-    # fw = 0
-    [0.5, 0.0, 1.0, 1.1020, 1.7474, 2.8250],
-    [0.5, 0.0, 2.0, 1.2495, 2.3479, 2.6049],
-    [0.5, 0.0, 5.0, 1.5503, 3.7996, 2.2380],
-    [0.5, 0.0, 8.0, 1.7610, 4.9990, 2.0340],
-    # fw = 1
-    [0.5, 1.0, 1.0, 1.3745, 1.6264, 2.4624],
-    [0.5, 1.0, 2.0, 1.5041, 2.1591, 2.3115],
-    [0.5, 1.0, 5.0, 1.7825, 3.4927, 2.0347],
-    [0.5, 1.0, 8.0, 1.9836, 4.6181, 1.8688],
+    [0.5, -1.0, 1.0, -0.8862, 1.8862, 3.2154],
+    [0.5, -1.0, 2.0, -1.0450, 2.5547, 2.9088],
+    [0.5, -1.0, 5.0, -1.3575, 4.1212, 2.4379],
+    [0.5, -1.0, 8.0, -1.5724, 5.3921, 1.8704],
+    # fw = 0-
+    [0.5, 0.0, 1.0, -1.1020, 1.7474, 2.8250],
+    [0.5, 0.0, 2.0, -1.2495, 2.3479, 2.6049],
+    [0.5, 0.0, 5.0, -1.5503, 3.7996, 2.2380],
+    [0.5, 0.0, 8.0, -1.7610, 4.9990, 2.0340],
+    # fw = 1-
+    [0.5, 1.0, 1.0, -1.3745, 1.6264, 2.4624],
+    [0.5, 1.0, 2.0, -1.5041, 2.1591, 2.3115],
+    [0.5, 1.0, 5.0, -1.7825, 3.4927, 2.0347],
+    [0.5, 1.0, 8.0, -1.9836, 4.6181, 1.8688],
 
     # --- Lambda = 2.0 ---
     # fw = -1
-    [2.0, -1.0, 1.0, 1.6309, 2.1235, 2.2138],
-    [2.0, -1.0, 2.0, 1.9494, 2.9781, 2.0284],
-    [2.0, -1.0, 5.0, 2.5716, 4.9815, 1.7304],
-    [2.0, -1.0, 8.0, 2.9971, 6.6069, 1.5729],
+    [2.0, -1.0, 1.0, -1.6309, 2.1235, 2.2138],
+    [2.0, -1.0, 2.0, -1.9494, 2.9781, 2.0284],
+    [2.0, -1.0, 5.0, -2.5716, 4.9815, 1.7304],
+    [2.0, -1.0, 8.0, -2.9971, 6.6069, 1.5729],
     # fw = 0, 3.2154
-    [2.0, 0.0, 1.0, 2.0044, 1.9159, 1.8532],
-    [2.0, 0.0, 2.0, 2.2889, 2.6630, 1.7334],
-    [2.0, 0.0, 5.0, 2.8820, 4.4981, 1.5188],
-    [2.0, 0.0, 8.0, 3.2927, 6.0105, 1.3954],
-    # fw = 1
-    [2.0, 1.0, 1.0, 2.5182, 1.7391, 1.5371],
-    [2.0, 1.0, 2.0, 2.7574, 2.3852, 1.4656],
-    [2.0, 1.0, 5.0, 3.2827, 4.0268, 1.3230],
-    [2.0, 1.0, 8.0, 3.6683, 5.4273, 1.2327]
+    [2.0, 0.0, 1.0, -2.0044, 1.9159, 1.8532],
+    [2.0, 0.0, 2.0, -2.2889, 2.6630, 1.7334],
+    [2.0, 0.0, 5.0, -2.8820, 4.4981, 1.5188],
+    [2.0, 0.0, 8.0, -3.2927, 6.0105, 1.3954],
+    # fw = 1-
+    [2.0, 1.0, 1.0, -2.5182, 1.7391, 1.5371],
+    [2.0, 1.0, 2.0, -2.7574, 2.3852, 1.4656],
+    [2.0, 1.0, 5.0, -3.2827, 4.0268, 1.3230],
+    [2.0, 1.0, 8.0, -3.6683, 5.4273, 1.2327]
 ]
 
 dataOptimized = [ # ערכי ההתחלה מהמאמר
@@ -674,8 +781,8 @@ dataOptimized = [ # ערכי ההתחלה מהמאמר
     # fw = -1
     [0.5, -1.0, 1.0, 0.8862, 1.8862, 3.2154],
     [0.5, -1.0, 2.0, 1.0450-0.1, 2.5547-0.1, 2.9088],
-    [0.5, -1.0, 5.0, 1.3575, 4.1212, 2.4379],
-    [0.5, -1.0, 8.0, 1.5724, 5.3921, 1.8704],
+    [0.5, -1.0, 5.0, 1.3575, 4.1212-4, 2.4379],
+    [0.5, -1.0, 8.0, 1.5724, 5.3921-5, 1.8704],
     # fw = 0
     [0.5, 0.0, 1.0, 1.1020, 1.7474, 2.8250],
     [0.5, 0.0, 2.0, 1.2495, 2.3479, 2.6049],
@@ -691,8 +798,8 @@ dataOptimized = [ # ערכי ההתחלה מהמאמר
     # fw = -1
     [2.0, -1.0, 1.0, 1.6309, 2.1235, 2.2138],
     [2.0, -1.0, 2.0, 1.9494, 2.9781, 2.0284],
-    [2.0, -1.0, 5.0, 2.5716+0.35, 4.9815, 1.7304],
-    [2.0, -1.0, 8.0, 2.9971, 6.6069, 1.5729],
+    [2.0, -1.0, 5.0, 2.5716+0.35, 4.9815-4, 1.7304],
+    [2.0, -1.0, 8.0, 2.9971+0.35, 6.6069-5, 1.5729],
     # fw = 0, 3.2154
     [2.0, 0.0, 1.0, 2.0044, 1.9159, 1.8532],
     [2.0, 0.0, 2.0, 2.2889, 2.6630, 1.7334],
@@ -711,18 +818,18 @@ initGuessArray = np.array(dataOptimized)
 # initGuessArray[:, 3] += 0.01
 # initGuessArray[:, 4] -= 0.1
 
-lambdaArray = np.asarray([0.5, 2])
+# lambdaArray = np.asarray([0.5, 2])
 # lambdaArray = np.asarray([2])
-# lambdaArray = np.asarray([0.5])
+lambdaArray = np.asarray([0.5])
 fw = np.asarray([-1, 0, 1])
 # fw = np.asarray([-1])
 # fw = np.asarray([0])
 # fw = np.asarray([1])
 # fw = np.asarray([0, 1])
 # oneOverC = np.asarray([1, 2, 5, 8])
-oneOverC = np.asarray([1, 2, 5, 8])
+# oneOverC = np.asarray([1, 2, 5, 8])
 # oneOverC = np.asarray([2, 5, 8])
-# oneOverC = np.asarray([5, 8])
+oneOverC = np.asarray([5, 8])
 # oneOverC = np.asarray([8])
 
 resArray = []
@@ -735,23 +842,89 @@ lambdaLabels = {0.5: '0.5', 2.0: '2.0'}
 cLabels = {1: '1', 2: '2', 5: '5', 8: '8'}
 labels = ['f(eta)', "f '(eta)", 'theta(eta)', "theta '(eta)"]
 
-# resArray, paramsArray = shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS=1e-5)
-resArray, paramsArray = finite_difference_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS=1e-4)
+# Run both methods
+print("Running Shooting Method...")
+resArray_shooting, paramsArray_shooting = shooting_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS=1e-4)
+print("\nRunning Finite Difference Method...")
+resArray_fd, paramsArray_fd = finite_difference_method(lambdaArray, fw, oneOverC, initGuessArray, TARGET_THETA, EPS=1e-4)
 
-for idx, label in enumerate(labels):
-    # if idx != 1:
-    #     continue
-    plt.figure()
+# Flexible plotting function
+def plot_comparison(variable_idx, filter_lambda=None, filter_fw=None, filter_oneOverC=None, 
+                   plot_shooting=True, plot_fd=True):
+    """Plot and compare results from shooting and finite difference methods with filtering options.
+    
+    Args:
+        variable_idx (int): Index of variable to plot (0=f, 1=f', 2=theta, 3=theta').
+        filter_lambda (float, optional): Filter results by lambda value (0.5 or 2.0). Defaults to None.
+        filter_fw (float, optional): Filter results by fw value (-1, 0, or 1). Defaults to None.
+        filter_oneOverC (float, optional): Filter results by 1/C value (1, 2, 5, or 8). Defaults to None.
+        plot_shooting (bool, optional): Whether to plot shooting method results. Defaults to True.
+        plot_fd (bool, optional): Whether to plot finite difference results. Defaults to True.
+    
+    Returns:
+        None: Displays matplotlib figure.
+    
+    Examples:
+        >>> plot_comparison(2)  # Plot all theta for all parameters
+        >>> plot_comparison(3, filter_oneOverC=2)  # Plot theta' only for 1/C=2
+        >>> plot_comparison(2, filter_fw=1, plot_fd=False)  # Plot theta from shooting only, fw=1
+    """
+    plt.figure(figsize=(10, 6))
     plt.grid()
-    for i, run in enumerate(resArray):
-        eta_vals = run[0]
-        f_vals = run[1][idx, :] # For finite differences method
-        # f_vals = run[1][:, idx]   # For shooting method
-        params = paramsArray[i]
-        legend_label = f"λ={params['lambda']}, fw={params['fw']}, 1/C={params['oneOverC']}"
-        plt.plot(eta_vals, f_vals, label=legend_label)
-        plt.xlabel('Eta')
-        plt.ylabel(label)
-    plt.legend()
+    
+    # Plot shooting method results
+    if plot_shooting:
+        for i, (run, params) in enumerate(zip(resArray_shooting, paramsArray_shooting)):
+            # Apply filters
+            if filter_lambda is not None and params['lambda'] != filter_lambda:
+                continue
+            if filter_fw is not None and params['fw'] != filter_fw:
+                continue
+            if filter_oneOverC is not None and params['oneOverC'] != filter_oneOverC:
+                continue
             
+            eta_vals = run[0]
+            f_vals = run[1][:, variable_idx]
+            legend_label = f"Shoot: λ={params['lambda']}, fw={params['fw']}, 1/C={params['oneOverC']}"
+            plt.plot(eta_vals, f_vals, label=legend_label, linestyle='-')
+    
+    # Plot finite difference results
+    if plot_fd:
+        for i, (run, params) in enumerate(zip(resArray_fd, paramsArray_fd)):
+            # Apply filters
+            if filter_lambda is not None and params['lambda'] != filter_lambda:
+                continue
+            if filter_fw is not None and params['fw'] != filter_fw:
+                continue
+            if filter_oneOverC is not None and params['oneOverC'] != filter_oneOverC:
+                continue
+            
+            eta_vals = run[0]
+            f_vals = run[1][:, variable_idx]
+            legend_label = f"FD: λ={params['lambda']}, fw={params['fw']}, 1/C={params['oneOverC']}"
+            plt.plot(eta_vals, f_vals, label=legend_label, linestyle='--')
+    
+    plt.xlabel('Eta')
+    plt.ylabel(labels[variable_idx])
+    plt.title(labels[variable_idx])
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+
+# Example plots - uncomment the ones you want:
+
+# # Plot all theta (variable_idx=2) for all fw values
+# plot_comparison(2, filter_lambda=None, filter_fw=None, filter_oneOverC=None)
+
+# Plot all f' (variable_idx=1) for all runs
+plot_comparison(1)
+
+# Plot theta' (variable_idx=3) for oneOverC=2
+# plot_comparison(3, filter_oneOverC=2)
+
+# Plot theta for fw=1 only
+# plot_comparison(2, filter_fw=1)
+
+# Plot f for lambda=0.5, fw=0
+# plot_comparison(0, filter_lambda=0.5, filter_fw=0)
+
 plt.show()
