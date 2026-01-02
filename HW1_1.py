@@ -893,85 +893,235 @@ def integrate(f_start, df0, dtheta0, lam, eta_inf):
 # ==========================================
 
 def get_smart_eta(fw):
-    if fw == -1.0: return 20.0  
+    if fw == -1.0: return 10.0  
     if fw == 0.0:  return 10.0
-    return 6.0                  
+    return 5.0                 
 
-def solve_single_case(lam, fw, one_over_c):
-    c_val = 1.0 / one_over_c
-    f_start = fw * (c_val**(-1/3))
-    target_fp = c_val**(2/3)
-    target_theta = 0.0
-    
-    current_eta = get_smart_eta(fw)
-    
-    # --- שלב א: סריקה גסה (Grid Search) ---
+def _grid_search_initial_guess(
+    *,
+    lam: float,
+    f_start: float,
+    eta_inf: float,
+    target_fp: float,
+    target_theta: float,
+    df_min: float,
+    df_max: float,
+    dtheta_min: float,
+    dtheta_max: float,
+    n_df: int,
+    n_dtheta: int,
+):
     best_guess = None
-    min_err = 1e9
-    
-    scan_df = np.linspace(0.0, target_fp * 2.0 + 1.0, 7)
-    scan_dtheta = np.linspace(-3.0, -0.1, 7)
-    
+    best_err = np.inf
+
+    scan_df = np.linspace(df_min, df_max, n_df)
+    scan_dtheta = np.linspace(dtheta_min, dtheta_max, n_dtheta)
+
     for g_df in scan_df:
         for g_dt in scan_dtheta:
-            y_end, _, _, valid = integrate(f_start, g_df, g_dt, lam, current_eta)
-            if valid:
-                err = np.sqrt((y_end[1]-target_fp)**2 + (y_end[2]-target_theta)**2)
-                if err < min_err:
-                    min_err = err
-                    best_guess = [g_df, g_dt]
-    
-    if best_guess is None:
-        curr_df, curr_dt = target_fp, -1.0
+            y_end, _, _, valid = integrate(f_start, g_df, g_dt, lam, eta_inf)
+            if not valid:
+                continue
+
+            err_fp = y_end[1] - target_fp
+            err_t = y_end[2] - target_theta
+            err = float(np.hypot(err_fp, err_t))
+
+            if err < best_err:
+                best_err = err
+                best_guess = (float(g_df), float(g_dt))
+
+    return best_guess, best_err
+
+def _newton_solve(
+    *,
+    lam: float,
+    f_start: float,
+    eta_inf: float,
+    target_fp: float,
+    target_theta: float,
+    df0: float,
+    dtheta0: float,
+    max_iter: int = 40,
+):
+    curr_df, curr_dt = float(df0), float(dtheta0)
+
+    for _ in range(max_iter):
+        y_end, eta_arr, hist, valid = integrate(f_start, curr_df, curr_dt, lam, eta_inf)
+        if not valid:
+            # back off to regain validity
+            curr_df *= 0.9
+            curr_dt *= 0.9
+            continue
+
+        err_fp = float(y_end[1] - target_fp)
+        err_t = float(y_end[2] - target_theta)
+        err_norm = float(np.hypot(err_fp, err_t))
+
+        if err_norm < TOL:
+            return (eta_arr, hist), True, curr_df, curr_dt
+
+        # Finite-difference Jacobian
+        y_A, _, _, vA = integrate(f_start, curr_df + DELTA, curr_dt, lam, eta_inf)
+        y_B, _, _, vB = integrate(f_start, curr_df, curr_dt + DELTA, lam, eta_inf)
+        if (not vA) or (not vB):
+            # small perturbation to escape invalid region
+            curr_df = max(0.0, curr_df + 0.05)
+            continue
+
+        J = np.array(
+            [
+                [(y_A[1] - y_end[1]) / DELTA, (y_B[1] - y_end[1]) / DELTA],
+                [(y_A[2] - y_end[2]) / DELTA, (y_B[2] - y_end[2]) / DELTA],
+            ],
+            dtype=float,
+        )
+        rhs = np.array([err_fp, err_t], dtype=float)
+
+        try:
+            step = -np.linalg.solve(J, rhs)
+        except np.linalg.LinAlgError:
+            curr_df = max(0.0, curr_df + 0.05)
+            continue
+
+        # Clamp step sizes to prevent blow-ups
+        step[0] = float(np.clip(step[0], -0.75, 0.75))
+        step[1] = float(np.clip(step[1], -1.5, 1.5))
+
+        # Backtracking line search: accept only if error decreases
+        alpha = 1.0
+        accepted = False
+        for _ls in range(8):
+            trial_df = max(0.0, curr_df + alpha * step[0])
+            trial_dt = curr_dt + alpha * step[1]
+            y_trial, _, _, valid_trial = integrate(f_start, trial_df, trial_dt, lam, eta_inf)
+
+            if not valid_trial:
+                alpha *= 0.5
+                continue
+
+            trial_err = float(np.hypot(y_trial[1] - target_fp, y_trial[2] - target_theta))
+            if trial_err < err_norm:
+                curr_df, curr_dt = trial_df, trial_dt
+                accepted = True
+                break
+            alpha *= 0.5
+
+        if not accepted:
+            # If Newton direction doesn't help, nudge mildly and keep going
+            curr_df = max(0.0, curr_df + 0.02)
+
+    return None, False, curr_df, curr_dt
+
+def solve_single_case(lam, fw, one_over_c, *, seed_guess=None):
+    # input is 1/C, so C = 1/(1/C)
+    c_val = 1.0 / float(one_over_c)
+    f_start = float(fw) * (c_val ** (-1.0 / 3.0))
+    target_fp = float(c_val ** (2.0 / 3.0))
+    target_theta = 0.0
+
+    # thicker BL for injection and for stronger natural convection (large 1/C)
+    current_eta = float(get_smart_eta(fw))
+    if fw == -1.0:
+        current_eta *= 1.0 + 0.08 * float(one_over_c)
     else:
-        curr_df, curr_dt = best_guess
+        current_eta *= 1.0 + 0.03 * float(one_over_c)
 
-    # --- שלב ב: ניוטון-רפסון ---
-    converged = False
-    final_res = None
-    
-    for i in range(30):
-        y_end, eta_arr, hist, valid = integrate(f_start, curr_df, curr_dt, lam, current_eta)
-        
-        if not valid: 
-            curr_df *= 0.9 
-            continue
+    # ===== Stage A: grid search to get a good Newton seed =====
+    # If we have a continuation guess from a nearby case, search locally around it.
+    if seed_guess is not None:
+        seed_df, seed_dt = seed_guess
+        df_min = max(0.0, seed_df - 1.0)
+        df_max = seed_df + 1.0
+        dt_min = seed_dt - 3.0
+        dt_max = min(-1e-6, seed_dt + 3.0)
+        n_df, n_dt = 17, 33
+    else:
+        # Generic coarse ranges (wide enough to cover all your cases)
+        df_min = 0.0
+        df_max = max(2.0, 4.0 * target_fp + 2.0)
+        dt_min = -30.0
+        dt_max = -1e-3
+        n_df, n_dt = 21, 61
 
-        err_fp = y_end[1] - target_fp
-        err_t = y_end[2] - target_theta
-        
-        if np.sqrt(err_fp**2 + err_t**2) < TOL:
-            converged = True
-            final_res = (eta_arr, hist)
-            break
-            
-        y_A, _, _, vA = integrate(f_start, curr_df + DELTA, curr_dt, lam, current_eta)
-        y_B, _, _, vB = integrate(f_start, curr_df, curr_dt + DELTA, lam, current_eta)
-        
-        if not vA or not vB:
-            curr_df += (np.random.rand() - 0.5) * 0.1 
-            continue
+    best_guess, best_err = _grid_search_initial_guess(
+        lam=lam,
+        f_start=f_start,
+        eta_inf=current_eta,
+        target_fp=target_fp,
+        target_theta=target_theta,
+        df_min=df_min,
+        df_max=df_max,
+        dtheta_min=dt_min,
+        dtheta_max=dt_max,
+        n_df=n_df,
+        n_dtheta=n_dt,
+    )
 
-        J11 = (y_A[1] - y_end[1]) / DELTA
-        J21 = (y_A[2] - y_end[2]) / DELTA
-        J12 = (y_B[1] - y_end[1]) / DELTA
-        J22 = (y_B[2] - y_end[2]) / DELTA
-        
-        det = J11*J22 - J12*J21
-        if abs(det) < 1e-9:
-            curr_df += 0.05 
-            continue
-            
-        d_df = -(J22 * err_fp - J12 * err_t) / det
-        d_dt = -(J11 * err_t - J21 * err_fp) / det
-        
-        d_df = np.clip(d_df, -0.5, 0.5)
-        d_dt = np.clip(d_dt, -0.5, 0.5)
-        
-        curr_df += d_df * 0.6 
-        curr_dt += d_dt * 0.6
+    # Refinement pass around the best coarse guess (helps Newton a lot)
+    if best_guess is not None:
+        bdf, bdt = best_guess
+        best_guess2, _ = _grid_search_initial_guess(
+            lam=lam,
+            f_start=f_start,
+            eta_inf=current_eta,
+            target_fp=target_fp,
+            target_theta=target_theta,
+            df_min=max(0.0, bdf - 0.4),
+            df_max=bdf + 0.4,
+            dtheta_min=bdt - 1.0,
+            dtheta_max=min(-1e-6, bdt + 1.0),
+            n_df=17,
+            n_dtheta=25,
+        )
+        if best_guess2 is not None:
+            best_guess = best_guess2
+    else:
+        # last-resort fallback
+        best_guess = (target_fp, -1.0)
+        best_err = np.inf
 
-    return final_res, converged, curr_df, curr_dt
+    # ===== Stage B: damped Newton solve =====
+    res, success, final_df, final_dt = _newton_solve(
+        lam=lam,
+        f_start=f_start,
+        eta_inf=current_eta,
+        target_fp=target_fp,
+        target_theta=target_theta,
+        df0=best_guess[0],
+        dtheta0=best_guess[1],
+        max_iter=50,
+    )
+
+    # If Newton failed, try one more time with expanded eta and a wider grid.
+    if (not success) and (seed_guess is None) and (best_err > 1e-2):
+        eta2 = current_eta * 1.5
+        g2, _ = _grid_search_initial_guess(
+            lam=lam,
+            f_start=f_start,
+            eta_inf=eta2,
+            target_fp=target_fp,
+            target_theta=target_theta,
+            df_min=0.0,
+            df_max=max(2.0, 6.0 * target_fp + 3.0),
+            dtheta_min=-40.0,
+            dtheta_max=-1e-3,
+            n_df=25,
+            n_dtheta=71,
+        )
+        if g2 is not None:
+            res, success, final_df, final_dt = _newton_solve(
+                lam=lam,
+                f_start=f_start,
+                eta_inf=eta2,
+                target_fp=target_fp,
+                target_theta=target_theta,
+                df0=g2[0],
+                dtheta0=g2[1],
+                max_iter=60,
+            )
+
+    return res, success, final_df, final_dt
 
 # ==========================================
 # 3. הרצה והצגה עם מקרא (Legend)
@@ -986,15 +1136,19 @@ colors = plt.cm.jet(np.linspace(0, 1, 24))
 
 for lam in lambda_vals:
     for fw in fw_vals:
+        continuation_guess = None
         for one_over_c in one_over_c_vals:
             count += 1
-            
-            res, success, final_df, final_dt = solve_single_case(lam, fw, one_over_c)
+
+            res, success, final_df, final_dt = solve_single_case(
+                lam, fw, one_over_c, seed_guess=continuation_guess
+            )
             
             status = "OK" if success else "FAIL"
             print(f"{count:<4} {lam:<4} {int(fw):<4} {int(one_over_c):<4} | {status}")
             
             if success:
+                continuation_guess = (final_df, final_dt)
                 eta_vals, hist = res
                 theta = hist[2]
                 f_prime = hist[1]
